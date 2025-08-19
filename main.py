@@ -1,4 +1,4 @@
-# main.py (bdsplanet.com, 드롭다운 선택 최종 버전)
+# main.py (모든 기능 통합 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
@@ -22,10 +22,33 @@ class LowestPriceDto(BaseModel):
 
 
 # --- 크롤링 로직 ---
+
+async def handle_popups(page: Page):
+    """페이지에 나타날 수 있는 팝업이나 오버레이를 확인하고 닫습니다."""
+    print("[로그] 팝업/오버레이 확인 중...")
+    try:
+        close_button_selectors = [
+            ".btn_close", "button:has-text('닫기')", "button[class*='close']",
+            "a[class*='close']", "img[alt*='close']"
+        ]
+        for selector in close_button_selectors:
+            close_button = page.locator(selector).first
+            if await close_button.is_visible(timeout=2500):
+                print(f"[로그] 팝업 닫기 버튼 '{selector}' 찾음. 클릭 시도...")
+                await close_button.click(timeout=5000)
+                await page.wait_for_timeout(500)
+                print("[로그] 팝업 닫기 완료.")
+                return
+        print("[로그] 추가로 감지된 팝업 없음.")
+    except Exception:
+        print("[로그] 감지된 팝업 없음 (타임아웃).")
+
+
 async def extract_price(page: Page) -> Union[int, None]:
     try:
         print("[로그] 가격 추출 시작...")
         await page.wait_for_load_state('networkidle', timeout=10000)
+        await handle_popups(page)
         selectors = [
             "*:has-text('매물 최저가') >> .. >> .price-info-area .price-area .txt",
             ".price-info-area .price-area .txt",
@@ -55,7 +78,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         )
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
         )
         page: Page = await context.new_page()
         await stealth_async(page)
@@ -68,28 +91,26 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             await page.goto(base_url, wait_until="load", timeout=30000)
             print("[로그] 1. 사이트 접속 성공")
 
+            await handle_popups(page)
+
             print("[로그] 2. 검색창 탐색 및 주소 입력...")
             search_input = page.locator("input#searchInput").first
             await search_input.wait_for(state="visible", timeout=15000)
             await search_input.type(address, delay=120)
             print("[로그] 2. 주소 입력 완료")
 
-            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
             print("[로그] 3. 드롭다운 목록 대기 및 첫번째 항목 클릭 시도...")
-            # bdsplanet 사이트의 자동완성 드롭다운 목록 선택자
             first_result_selector = "ul.d_list > li.list_item > a"
             first_result = page.locator(first_result_selector).first
-
-            # 첫 번째 결과가 나타날 때까지 대기
             await first_result.wait_for(state="visible", timeout=10000)
 
-            # 페이지 이동이 완료될 때까지 기다리면서 클릭 동작을 실행
             await asyncio.gather(
                 page.wait_for_load_state("networkidle", timeout=20000),
                 first_result.click()
             )
             print("[로그] 3. 드롭다운 첫번째 항목 클릭 및 페이지 이동 성공")
-            # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
+
+            await handle_popups(page)
 
             current_url = page.url
             print(f"[로그] 4. 현재 URL: {current_url}")
