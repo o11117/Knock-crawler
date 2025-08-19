@@ -1,9 +1,10 @@
-# main.py (고급 봇 탐지 우회 최종 버전)
+# main.py (playwright-stealth 적용 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from playwright.async_api import async_playwright, Page, Browser, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright, Page, Browser
+from playwright_stealth import stealth_async  # 스텔스 라이브러리 임포트
 from typing import Union
 from money_parser import to_won
 
@@ -40,14 +41,13 @@ async def extract_prices(page: Page) -> dict:
                 elif '전세' in trade_type and prices['rent'] is None:
                     prices['rent'] = price_won
                     print(f"[로그] 전세가 추출 성공: {price_won}")
-
     except Exception as e:
         print(f"[오류] 가격 추출 중 오류 발생: {e}")
     return prices
 
 
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
-    print(f"\n--- [로그] 새로운 크롤링 요청 시작 (대상: disco.re) ---")
+    print(f"\n--- [로그] 새로운 크롤링 요청 시작 (대상: disco.re, 스텔스 모드) ---")
     print(f"[로그] 요청 주소: {address}")
     async with async_playwright() as p:
         browser: Browser = await p.chromium.launch(
@@ -62,21 +62,19 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             viewport={'width': 1920, 'height': 1080}
         )
         page: Page = await context.new_page()
+
+        # --- ▼▼▼▼▼ 핵심 수정: 스텔스 모드 적용 ▼▼▼▼▼ ---
+        await stealth_async(page)
+        print("[로그] 스텔스 모드가 적용되었습니다.")
+        # --- ▲▲▲▲▲ 핵심 수정 ▲▲▲▲▲ ---
+
         base_url = "https://www.disco.re"
-        page.set_default_timeout(45000)  # 전체 타임아웃 45초로 증가
-        print("[로그] 브라우저 컨텍스트 및 페이지 생성 완료")
+        page.set_default_timeout(45000)
 
         try:
-            # --- ▼▼▼▼▼ 핵심 수정 부분 (봇 탐지 우회 전략) ▼▼▼▼▼ ---
-            print("[로그] 1. 봇 탐지 우회를 위해 Google에 먼저 접속합니다...")
-            await page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=20000)
-            print("[로그] 1a. Google 접속 성공. 사람처럼 보이기 위해 잠시 대기...")
-            await page.wait_for_timeout(1000)
-
-            print("[로그] 1b. 이제 목표 사이트로 이동합니다...")
+            print("[로그] 1. 사이트 접속 시도...")
             await page.goto(base_url, wait_until="load", timeout=30000)
-            print("[로그] 1c. 목표 사이트 접속 성공")
-            # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
+            print("[로그] 1. 사이트 접속 성공")
 
             print("[로그] 2. 검색창 탐색 및 주소 입력...")
             search_input = page.locator("input[placeholder='주소를 입력하세요']").first

@@ -37,3 +37,8 @@ fastapi
 uvicorn[standart]
 pydantic
 playwright
+fastapi
+uvicorn[standard]
+pydantic
+playwright
+playwright-stealth
