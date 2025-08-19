@@ -1,9 +1,9 @@
-# main.py (playwright-stealth 적용 최종 버전)
+# main.py (bdsplanet.com 크롤링 + 스텔스 모드)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from playwright.async_api import async_playwright, Page, Browser
+from playwright.async_api import async_playwright, Page, Browser, TimeoutError as PlaywrightTimeoutError
 from playwright_stealth import stealth_async  # 스텔스 라이브러리 임포트
 from typing import Union
 from money_parser import to_won
@@ -22,101 +22,103 @@ class LowestPriceDto(BaseModel):
 
 
 # --- 크롤링 로직 ---
-async def extract_prices(page: Page) -> dict:
-    print("[로그] 가격 추출 시작...")
-    prices = {'sale': None, 'rent': None}
+async def extract_price(page: Page) -> Union[int, None]:
     try:
-        await page.wait_for_selector("text='실거래가'", timeout=10000)
-        list_items = await page.locator("ul > li:has(span:text-matches('^(매매|전세)$'))").all()
-
-        for item in list_items:
-            trade_type = await item.locator("span").first.text_content()
-            price_text = await item.locator("strong").first.text_content()
-
-            if price_text:
-                price_won = to_won(price_text.strip())
-                if '매매' in trade_type and prices['sale'] is None:
-                    prices['sale'] = price_won
-                    print(f"[로그] 매매가 추출 성공: {price_won}")
-                elif '전세' in trade_type and prices['rent'] is None:
-                    prices['rent'] = price_won
-                    print(f"[로그] 전세가 추출 성공: {price_won}")
+        await page.wait_for_load_state('networkidle', timeout=7000)
+        selectors = [
+            "*:has-text('매물 최저가') >> .. >> .price-info-area .price-area .txt",
+            ".price-info-area .price-area .txt",
+        ]
+        for selector in selectors:
+            elements = await page.locator(selector).all()
+            for el in elements:
+                if await el.is_visible():
+                    price_text = await el.text_content()
+                    if price_text and ('억' in price_text or '만' in price_text):
+                        price = to_won(price_text.strip())
+                        if price > 0: return price
     except Exception as e:
-        print(f"[오류] 가격 추출 중 오류 발생: {e}")
-    return prices
+        print(f"가격 추출 중 오류: {e}")
+    return None
 
 
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
-    print(f"\n--- [로그] 새로운 크롤링 요청 시작 (대상: disco.re, 스텔스 모드) ---")
-    print(f"[로그] 요청 주소: {address}")
     async with async_playwright() as p:
         browser: Browser = await p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         )
-        print("[로그] Playwright 브라우저 시작 완료")
-
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
             java_script_enabled=True,
-            viewport={'width': 1920, 'height': 1080}
+            viewport={'width': 1920, 'height': 1080},
+            extra_http_headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1"
+            }
         )
+
         page: Page = await context.new_page()
 
-        # --- ▼▼▼▼▼ 핵심 수정: 스텔스 모드 적용 ▼▼▼▼▼ ---
+        # --- ▼▼▼▼▼ 스텔스 모드 적용 ▼▼▼▼▼ ---
         await stealth_async(page)
         print("[로그] 스텔스 모드가 적용되었습니다.")
-        # --- ▲▲▲▲▲ 핵심 수정 ▲▲▲▲▲ ---
+        # --- ▲▲▲▲▲ 스텔스 모드 적용 ▲▲▲▲▲ ---
 
-        base_url = "https://www.disco.re"
-        page.set_default_timeout(45000)
+        base_url = "https://www.bdsplanet.com"
+        page.set_default_timeout(30000)
 
         try:
-            print("[로그] 1. 사이트 접속 시도...")
-            await page.goto(base_url, wait_until="load", timeout=30000)
-            print("[로그] 1. 사이트 접속 성공")
+            await page.goto(f"{base_url}/main.ytp", wait_until="domcontentloaded", timeout=20000)
+            search_input_selectors = [
+                "input#searchInput", "input[placeholder*='주소']", "input[placeholder*='검색']",
+                "input[type='search']", "input[type='text']"
+            ]
+            search_input = None
+            for selector in search_input_selectors:
+                locator = page.locator(selector).first
+                try:
+                    await locator.wait_for(state="visible", timeout=3000)
+                    search_input = locator
+                    print(f"검색창 찾음: {selector}")
+                    break
+                except PlaywrightTimeoutError:
+                    continue
+            if not search_input: raise Exception("검색창을 찾을 수 없습니다.")
 
-            print("[로그] 2. 검색창 탐색 및 주소 입력...")
-            search_input = page.locator("input[placeholder='주소를 입력하세요']").first
-            await search_input.wait_for(state="visible", timeout=15000)
-            await search_input.type(address, delay=100)
+            await search_input.type(address, delay=150)
+            await page.wait_for_timeout(500)
             await search_input.press("Enter")
-            print("[로그] 2. 검색 실행 완료")
 
-            print("[로그] 3. 검색 결과 목록 대기 및 첫번째 항목 클릭...")
-            first_result_selector = "a[href*='/property/building/']"
+            first_result_selector = "ul.d_list > li.list_item > a"
             first_result = page.locator(first_result_selector).first
-            await first_result.wait_for(state="visible", timeout=15000)
-
-            await asyncio.gather(
-                page.wait_for_load_state("networkidle", timeout=20000),
-                first_result.click()
-            )
-            print("[로그] 3. 첫번째 결과 클릭 및 페이지 이동 완료")
+            await first_result.wait_for(state="visible", timeout=10000)
+            await first_result.click()
+            await page.wait_for_load_state("networkidle", timeout=15000)
 
             current_url = page.url
-            print(f"[로그] 4. 현재 URL: {current_url}")
+            match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp)", current_url)
 
-            if "/property/" not in current_url:
-                raise Exception("상세 페이지로 이동하지 못했습니다.")
-
-            prices = await extract_prices(page)
-
-            print("[로그] 크롤링 최종 성공")
-            return LowestPriceDto(
-                address=address,
-                salePrice=prices['sale'],
-                rentPrice=prices['rent'],
-                sourceUrl=current_url
-            )
-
+            if match:
+                base_pattern, _, suffix = match.groups()
+                sale_url = f"{base_url}{base_pattern}1{suffix}"
+                await page.goto(sale_url, wait_until="domcontentloaded")
+                sale_price = await extract_price(page)
+                rent_url = f"{base_url}{base_pattern}2{suffix}"
+                await page.goto(rent_url, wait_until="domcontentloaded")
+                rent_price = await extract_price(page)
+                return LowestPriceDto(address=address, salePrice=sale_price, rentPrice=rent_price, sourceUrl=sale_url)
+            else:
+                return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {current_url}")
         except Exception as e:
             error_message = str(e).splitlines()[0]
-            print(f"[오류] 크롤링 전체 과정에서 오류 발생: {error_message}")
             return LowestPriceDto(address=address, error=f"크롤링 오류: {error_message}")
         finally:
             await browser.close()
-            print("[로그] 브라우저 종료 및 자원 정리 완료")
 
 
 # --- API 엔드포인트 ---
