@@ -1,4 +1,4 @@
-# main.py (disco.re 크롤링 최종 버전)
+# main.py (고급 봇 탐지 우회 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
@@ -22,24 +22,15 @@ class LowestPriceDto(BaseModel):
 
 # --- 크롤링 로직 ---
 async def extract_prices(page: Page) -> dict:
-    """상세 페이지에서 매매가와 전세가를 추출합니다."""
     print("[로그] 가격 추출 시작...")
     prices = {'sale': None, 'rent': None}
     try:
-        # '실거래가' 탭이 로드될 때까지 대기
         await page.wait_for_selector("text='실거래가'", timeout=10000)
-
-        # 거래 유형(매매, 전세)과 가격을 모두 포함하는 리스트 아이템을 찾음
         list_items = await page.locator("ul > li:has(span:text-matches('^(매매|전세)$'))").all()
 
         for item in list_items:
-            # 거래 유형 텍스트 (매매 또는 전세)
-            trade_type_element = item.locator("span").first
-            trade_type = await trade_type_element.text_content()
-
-            # 가격 텍스트
-            price_element = item.locator("strong").first
-            price_text = await price_element.text_content()
+            trade_type = await item.locator("span").first.text_content()
+            price_text = await item.locator("strong").first.text_content()
 
             if price_text:
                 price_won = to_won(price_text.strip())
@@ -49,9 +40,6 @@ async def extract_prices(page: Page) -> dict:
                 elif '전세' in trade_type and prices['rent'] is None:
                     prices['rent'] = price_won
                     print(f"[로그] 전세가 추출 성공: {price_won}")
-
-        if prices['sale'] is None and prices['rent'] is None:
-            print("[로그] 페이지에서 가격 정보를 찾지 못했습니다.")
 
     except Exception as e:
         print(f"[오류] 가격 추출 중 오류 발생: {e}")
@@ -75,13 +63,20 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
         )
         page: Page = await context.new_page()
         base_url = "https://www.disco.re"
-        page.set_default_timeout(35000)
+        page.set_default_timeout(45000)  # 전체 타임아웃 45초로 증가
         print("[로그] 브라우저 컨텍스트 및 페이지 생성 완료")
 
         try:
-            print("[로그] 1. 사이트 접속 시도...")
-            await page.goto(base_url, wait_until="load", timeout=25000)
-            print("[로그] 1. 사이트 접속 성공")
+            # --- ▼▼▼▼▼ 핵심 수정 부분 (봇 탐지 우회 전략) ▼▼▼▼▼ ---
+            print("[로그] 1. 봇 탐지 우회를 위해 Google에 먼저 접속합니다...")
+            await page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=20000)
+            print("[로그] 1a. Google 접속 성공. 사람처럼 보이기 위해 잠시 대기...")
+            await page.wait_for_timeout(1000)
+
+            print("[로그] 1b. 이제 목표 사이트로 이동합니다...")
+            await page.goto(base_url, wait_until="load", timeout=30000)
+            print("[로그] 1c. 목표 사이트 접속 성공")
+            # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
 
             print("[로그] 2. 검색창 탐색 및 주소 입력...")
             search_input = page.locator("input[placeholder='주소를 입력하세요']").first
@@ -91,11 +86,10 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             print("[로그] 2. 검색 실행 완료")
 
             print("[로그] 3. 검색 결과 목록 대기 및 첫번째 항목 클릭...")
-            first_result_selector = "a[href*='/property/building/']"  # 건물 상세 페이지로 가는 링크
+            first_result_selector = "a[href*='/property/building/']"
             first_result = page.locator(first_result_selector).first
             await first_result.wait_for(state="visible", timeout=15000)
 
-            # 페이지 이동을 위해 클릭 후 로딩을 기다림
             await asyncio.gather(
                 page.wait_for_load_state("networkidle", timeout=20000),
                 first_result.click()
