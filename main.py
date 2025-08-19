@@ -1,4 +1,4 @@
-# main.py (HTTP 헤더 추가 최종 버전)
+# main.py (상세 로그 추가 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
@@ -23,6 +23,7 @@ class LowestPriceDto(BaseModel):
 # --- 크롤링 로직 ---
 async def extract_price(page: Page) -> Union[int, None]:
     try:
+        print("[로그] 가격 추출 시작...")
         await page.wait_for_load_state('networkidle', timeout=7000)
 
         selectors = [
@@ -37,45 +38,50 @@ async def extract_price(page: Page) -> Union[int, None]:
                     if price_text and ('억' in price_text or '만' in price_text):
                         price = to_won(price_text.strip())
                         if price > 0:
+                            print(f"[로그] 가격 추출 성공: {price}")
                             return price
+        print("[로그] 페이지에서 가격 정보를 찾지 못했습니다.")
     except Exception as e:
-        print(f"가격 추출 중 오류: {e}")
+        print(f"[오류] 가격 추출 중 오류 발생: {e}")
     return None
 
 
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
+    print("\n--- [로그] 새로운 크롤링 요청 시작 ---")
+    print(f"[로그] 요청 주소: {address}")
     async with async_playwright() as p:
         browser: Browser = await p.chromium.launch(
-            headless=True,  # 헤드리스 모드 활성화
+            headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         )
+        print("[로그] Playwright 브라우저 시작 완료")
 
-        # --- ▼▼▼▼▼ 봇 탐지 우회를 위한 헤더 추가 ▼▼▼▼▼ ---
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
             java_script_enabled=True,
             viewport={'width': 1920, 'height': 1080},
-            # 일반적인 브라우저 헤더를 추가하여 봇처럼 보이지 않게 합니다.
             extra_http_headers={
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                 "Accept-Encoding": "gzip, deflate, br",
                 "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
+                "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1",
                 "Upgrade-Insecure-Requests": "1"
             }
         )
-        # --- ▲▲▲▲▲ 여기까지 수정 ▲▲▲▲▲ ---
-
         page: Page = await context.new_page()
         base_url = "https://www.bdsplanet.com"
         page.set_default_timeout(30000)
+        print("[로그] 브라우저 컨텍스트 및 페이지 생성 완료")
 
         try:
+            # 1. 사이트 접속
+            print("[로그] 1. 사이트 접속 시도...")
             await page.goto(f"{base_url}/main.ytp", wait_until="domcontentloaded", timeout=20000)
+            print("[로그] 1. 사이트 접속 성공")
 
+            # 2. 검색 실행
+            print("[로그] 2. 검색창 탐색 시작...")
             search_input_selectors = [
                 "input#searchInput", "input[placeholder*='주소']",
                 "input[placeholder*='검색']", "input[type='search']", "input[type='text']"
@@ -86,7 +92,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
                 try:
                     await locator.wait_for(state="visible", timeout=3000)
                     search_input = locator
-                    print(f"검색창 찾음: {selector}")
+                    print(f"[로그] 2. 검색창 찾음: '{selector}'")
                     break
                 except PlaywrightTimeoutError:
                     continue
@@ -96,35 +102,53 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             await search_input.type(address, delay=150)
             await page.wait_for_timeout(500)
             await search_input.press("Enter")
+            print("[로그] 2. 주소 입력 및 검색 실행 완료")
 
+            # 3. 자동완성 목록 클릭
+            print("[로그] 3. 자동완성 목록 대기 및 클릭 시도...")
             first_result_selector = "ul.d_list > li.list_item > a"
             first_result = page.locator(first_result_selector).first
             await first_result.wait_for(state="visible", timeout=10000)
             await first_result.click()
-            await page.wait_for_load_state("networkidle", timeout=15000)
+            print("[로그] 3. 자동완성 목록 클릭 성공")
 
+            await page.wait_for_load_state("networkidle", timeout=15000)
+            print("[로그] 3. 페이지 이동 및 로딩 완료")
+
+            # 4. URL 분석 및 가격 추출
             current_url = page.url
+            print(f"[로그] 4. 현재 URL: {current_url}")
             match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp)", current_url)
 
             if match:
+                print("[로그] 4. URL 패턴 분석 성공")
                 base_pattern, _, suffix = match.groups()
+
+                # 매매
                 sale_url = f"{base_url}{base_pattern}1{suffix}"
+                print(f"[로그] 4a. 매매 정보 페이지로 이동: {sale_url}")
                 await page.goto(sale_url, wait_until="domcontentloaded")
                 sale_price = await extract_price(page)
 
+                # 전세
                 rent_url = f"{base_url}{base_pattern}2{suffix}"
+                print(f"[로그] 4b. 전세 정보 페이지로 이동: {rent_url}")
                 await page.goto(rent_url, wait_until="domcontentloaded")
                 rent_price = await extract_price(page)
 
+                print("[로그] 크롤링 최종 성공")
                 return LowestPriceDto(address=address, salePrice=sale_price, rentPrice=rent_price, sourceUrl=sale_url)
             else:
+                print("[오류] 4. URL 패턴 분석 실패")
                 return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {current_url}")
 
         except Exception as e:
             error_message = str(e).splitlines()[0]
+            print(f"[오류] 크롤링 전체 과정에서 오류 발생: {error_message}")
             return LowestPriceDto(address=address, error=f"크롤링 오류: {error_message}")
         finally:
             await browser.close()
+            print("[로그] 브라우저 종료 및 자원 정리 완료")
 
 
 # --- API 엔드포인트 ---
