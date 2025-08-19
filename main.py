@@ -97,10 +97,11 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             search_input = page.locator("input#searchInput").first
             await search_input.wait_for(state="visible", timeout=15000)
             await search_input.type(address, delay=120)
+
             print("[로그] 2. 주소 입력 완료")
 
             print("[로그] 3. 드롭다운 목록 대기 및 첫번째 항목 클릭 시도...")
-            first_result_selector = "ul.d_list > li.list_item > a"
+            first_result_selector = "ul > li.ui-menu-item > a"
             first_result = page.locator(first_result_selector).first
             await first_result.wait_for(state="visible", timeout=10000)
 
