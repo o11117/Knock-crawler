@@ -1,4 +1,4 @@
-# main.py (상세 로그 추가 최종 버전)
+# main.py (자동완성 의존성 제거 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
@@ -75,12 +75,10 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
         print("[로그] 브라우저 컨텍스트 및 페이지 생성 완료")
 
         try:
-            # 1. 사이트 접속
             print("[로그] 1. 사이트 접속 시도...")
             await page.goto(f"{base_url}/main.ytp", wait_until="domcontentloaded", timeout=20000)
             print("[로그] 1. 사이트 접속 성공")
 
-            # 2. 검색 실행
             print("[로그] 2. 검색창 탐색 시작...")
             search_input_selectors = [
                 "input#searchInput", "input[placeholder*='주소']",
@@ -100,22 +98,16 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             if not search_input: raise Exception("검색창을 찾을 수 없습니다.")
 
             await search_input.type(address, delay=150)
-            await page.wait_for_timeout(500)
             await search_input.press("Enter")
             print("[로그] 2. 주소 입력 및 검색 실행 완료")
 
-            # 3. 자동완성 목록 클릭
-            print("[로그] 3. 자동완성 목록 대기 및 클릭 시도...")
-            first_result_selector = "ul.d_list > li.list_item > a"
-            first_result = page.locator(first_result_selector).first
-            await first_result.wait_for(state="visible", timeout=10000)
-            await first_result.click()
-            print("[로그] 3. 자동완성 목록 클릭 성공")
-
+            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
+            # 자동완성 클릭을 제거하고, 페이지가 스스로 이동하여 안정화될 때까지 기다립니다.
+            print("[로그] 3. 검색 후 페이지 이동 및 로딩 대기...")
             await page.wait_for_load_state("networkidle", timeout=15000)
-            print("[로그] 3. 페이지 이동 및 로딩 완료")
+            print("[로그] 3. 페이지 로딩 완료")
+            # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
 
-            # 4. URL 분석 및 가격 추출
             current_url = page.url
             print(f"[로그] 4. 현재 URL: {current_url}")
             match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp)", current_url)
@@ -124,13 +116,11 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
                 print("[로그] 4. URL 패턴 분석 성공")
                 base_pattern, _, suffix = match.groups()
 
-                # 매매
                 sale_url = f"{base_url}{base_pattern}1{suffix}"
                 print(f"[로그] 4a. 매매 정보 페이지로 이동: {sale_url}")
                 await page.goto(sale_url, wait_until="domcontentloaded")
                 sale_price = await extract_price(page)
 
-                # 전세
                 rent_url = f"{base_url}{base_pattern}2{suffix}"
                 print(f"[로그] 4b. 전세 정보 페이지로 이동: {rent_url}")
                 await page.goto(rent_url, wait_until="domcontentloaded")
