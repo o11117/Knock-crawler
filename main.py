@@ -104,17 +104,18 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
 
                 return LowestPriceDto(address=address, salePrice=sale_price, rentPrice=rent_price, sourceUrl=sale_url)
             else:
-                # [디버깅용] 에러 발생 시 스크린샷 저장
-                await page.screenshot(path="error_screenshot.png")
-                print(f"URL 패턴 분석 실패. 현재 URL: {current_url}")
-                return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {current_url}")
+                    # [디버깅용] 에러 발생 시 스크린샷 저장 경로 수정
+                    await page.screenshot(path="/tmp/error_screenshot.png")  # 경로 수정
+                    print(f"URL 패턴 분석 실패. 현재 URL: {current_url}")
+                    return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {current_url}")
 
         except Exception as e:
-            await page.screenshot(path="error_screenshot.png")
-            print(f"크롤링 전체 과정에서 오류 발생: {e}")
-            return LowestPriceDto(address=address, error=f"크롤링 오류: {e}")
+                # [디버깅용] 에러 발생 시 스크린샷 저장 경로 수정
+                await page.screenshot(path="/tmp/error_screenshot.png")  # 경로 수정
+                print(f"크롤링 전체 과정에서 오류 발생: {e}")
+                return LowestPriceDto(address=address, error=f"크롤링 오류: {e}")
         finally:
-            await browser.close()
+                await browser.close()
 
 
 # --- API 엔드포인트 ---
