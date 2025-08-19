@@ -1,4 +1,4 @@
-# main.py (bdsplanet.com, 드롭다운 선택 최종 버전)
+# main.py (팝업 처리 기능이 포함된 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
@@ -22,7 +22,42 @@ class LowestPriceDto(BaseModel):
 
 
 # --- 크롤링 로직 ---
+
+async def handle_popups(page: Page):
+    """페이지에 접속했을 때 나타날 수 있는 팝업이나 오버레이를 확인하고 닫습니다."""
+    print("[로그] 팝업/오버레이 확인 중...")
+    try:
+        # 일반적인 팝업 닫기 버튼 선택자 목록
+        close_button_selectors = [
+            "button:has-text('닫기')",
+            "button[class*='close']",
+            "a[class*='close']",
+            "img[alt*='close']",
+            "div[class*='popup'] button[class*='close']",
+            ".btn_close"  # bdsplanet에서 사용하는 팝업 닫기 버튼 클래스
+        ]
+
+        for selector in close_button_selectors:
+            close_button = page.locator(selector).first
+            # 팝업이 나타날 때까지 최대 2초만 기다림
+            if await close_button.is_visible(timeout=2000):
+                print(f"[로그] 팝업 닫기 버튼 '{selector}' 찾음. 클릭 시도...")
+                await close_button.click(timeout=5000)
+                await page.wait_for_timeout(500)  # 닫히는 애니메이션 대기
+                print("[로그] 팝업 닫기 완료.")
+                return  # 팝업을 하나 닫았으면 함수 종료
+
+        print("[로그] 추가로 감지된 팝업 없음.")
+    except PlaywrightTimeoutError:
+        # 타임아웃은 팝업이 없다는 의미이므로 정상 처리
+        print("[로그] 감지된 팝업 없음 (타임아웃).")
+    except Exception as e:
+        # 다른 오류는 로그만 남기고 무시하여 크롤링이 중단되지 않도록 함
+        print(f"[경고] 팝업 처리 중 예외 발생 (무시하고 계속 진행): {e}")
+
+
 async def extract_price(page: Page) -> Union[int, None]:
+    # ... 가격 추출 로직은 이전과 동일 ...
     try:
         print("[로그] 가격 추출 시작...")
         await page.wait_for_load_state('networkidle', timeout=10000)
@@ -55,14 +90,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         )
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-            java_script_enabled=True,
-            viewport={'width': 1920, 'height': 1080},
-            extra_http_headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
-            }
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
         )
         page: Page = await context.new_page()
         await stealth_async(page)
@@ -75,28 +103,27 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             await page.goto(base_url, wait_until="load", timeout=30000)
             print("[로그] 1. 사이트 접속 성공")
 
+            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
+            # 페이지 접속 직후 팝업 처리 로직 호출
+            await handle_popups(page)
+            # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
+
             print("[로그] 2. 검색창 탐색 및 주소 입력...")
             search_input = page.locator("input#searchInput").first
             await search_input.wait_for(state="visible", timeout=15000)
             await search_input.type(address, delay=120)
             print("[로그] 2. 주소 입력 완료")
 
-            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
             print("[로그] 3. 드롭다운 목록 대기 및 첫번째 항목 클릭 시도...")
-            # bdsplanet 사이트의 자동완성 드롭다운 목록 선택자
             first_result_selector = "ul.d_list > li.list_item > a"
             first_result = page.locator(first_result_selector).first
-
-            # 첫 번째 결과가 나타날 때까지 대기
             await first_result.wait_for(state="visible", timeout=10000)
 
-            # 페이지 이동이 완료될 때까지 기다리면서 클릭 동작을 실행
             await asyncio.gather(
                 page.wait_for_load_state("networkidle", timeout=20000),
                 first_result.click()
             )
             print("[로그] 3. 드롭다운 첫번째 항목 클릭 및 페이지 이동 성공")
-            # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
 
             current_url = page.url
             print(f"[로그] 4. 현재 URL: {current_url}")
