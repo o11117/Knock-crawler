@@ -24,6 +24,7 @@ class LowestPriceDto(BaseModel):
 # --- 크롤링 로직 ---
 async def extract_price(page: Page) -> Union[int, None]:
     try:
+        print("[로그] 가격 추출 시작...")
         await page.wait_for_load_state('networkidle', timeout=10000)
         selectors = [
             "*:has-text('매물 최저가') >> .. >> .price-info-area .price-area .txt",
@@ -36,9 +37,12 @@ async def extract_price(page: Page) -> Union[int, None]:
                     price_text = await el.text_content()
                     if price_text and ('억' in price_text or '만' in price_text):
                         price = to_won(price_text.strip())
-                        if price > 0: return price
+                        if price > 0:
+                            print(f"[로그] 가격 추출 성공: {price}")
+                            return price
+        print("[로그] 페이지에서 가격 정보를 찾지 못했습니다.")
     except Exception as e:
-        print(f"가격 추출 중 오류: {e}")
+        print(f"[오류] 가격 추출 중 오류 발생: {e}")
     return None
 
 
