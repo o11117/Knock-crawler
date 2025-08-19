@@ -1,4 +1,4 @@
-# main.py (검색 버튼 클릭 로직 추가 최종 버전)
+# main.py (최종 안정화 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
@@ -24,7 +24,7 @@ class LowestPriceDto(BaseModel):
 async def extract_price(page: Page) -> Union[int, None]:
     try:
         print("[로그] 가격 추출 시작...")
-        await page.wait_for_load_state('networkidle', timeout=7000)
+        await page.wait_for_load_state('networkidle', timeout=10000)
 
         selectors = [
             "*:has-text('매물 최저가') >> .. >> .price-info-area .price-area .txt",
@@ -33,7 +33,7 @@ async def extract_price(page: Page) -> Union[int, None]:
         for selector in selectors:
             elements = await page.locator(selector).all()
             for el in elements:
-                if await el.is_visible():
+                if await el.is_visible(timeout=1000):
                     price_text = await el.text_content()
                     if price_text and ('억' in price_text or '만' in price_text):
                         price = to_won(price_text.strip())
@@ -63,10 +63,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             extra_http_headers={
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                 "Accept-Encoding": "gzip, deflate, br",
-                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1"
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
             }
         )
         page: Page = await context.new_page()
@@ -76,32 +73,35 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
 
         try:
             print("[로그] 1. 사이트 접속 시도...")
-            await page.goto(f"{base_url}/main.ytp", wait_until="domcontentloaded", timeout=20000)
-            print("[로그] 1. 사이트 접속 성공")
+            await page.goto(f"{base_url}/main.ytp", wait_until="load", timeout=25000)
+            print("[로그] 1. 사이트 접속 및 기본 로딩 완료")
 
-            print("[로그] 2. 검색창 탐색 시작...")
-            search_input = page.locator("input#searchInput").first
-            await search_input.wait_for(state="visible", timeout=5000)
+            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
+            print("[로그] 2. 검색창이 나타날 때까지 대기...")
+            # Playwright가 여러 선택자를 동시에 확인하도록 하여 가장 먼저 찾아지는 것을 사용
+            search_input_selector = ", ".join([
+                "input#searchInput", "input[placeholder*='주소']",
+                "input[placeholder*='검색']", "input[type='search']", "input[type='text']"
+            ])
+            search_input = page.locator(search_input_selector).first
+            await search_input.wait_for(state="visible", timeout=15000)  # 대기 시간 15초로 증가
             print("[로그] 2. 검색창 찾음")
 
             await search_input.type(address, delay=100)
-            await page.wait_for_timeout(200)
 
-            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
-            # Enter 키 대신 검색 버튼을 직접 클릭합니다.
             print("[로그] 2a. 검색 버튼 클릭 시도...")
             search_button = page.locator("button.btn_search").first
             await search_button.click()
             print("[로그] 2a. 검색 버튼 클릭 성공")
             # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
 
-            print("[로그] 3. 검색 후 페이지 이동 및 로딩 대기...")
-            await page.wait_for_load_state("networkidle", timeout=15000)
+            print("[로그] 3. 검색 결과 페이지 로딩 대기...")
+            await page.wait_for_load_state("networkidle", timeout=20000)
             print("[로그] 3. 페이지 로딩 완료")
 
             current_url = page.url
             print(f"[로그] 4. 현재 URL: {current_url}")
-            match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp)", current_url)
+            match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\\.ytp)", current_url)
 
             if match:
                 print("[로그] 4. URL 패턴 분석 성공")
