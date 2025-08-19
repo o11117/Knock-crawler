@@ -48,7 +48,13 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
-        page: Page = await browser.new_page()
+        # 실제 브라우저처럼 보이게 하기 위한 설정 추가
+        context = await browser.new_context(
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            viewport={'width': 1920, 'height': 1080},
+            locale='ko-KR'  # 한국어 설정 추가
+        )
+        page: Page = await context.new_page()
         base_url = "https://www.bdsplanet.com"
 
         try:
