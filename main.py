@@ -1,9 +1,10 @@
-# main.py (자동완성 의존성 제거 최종 버전)
+# main.py (bdsplanet.com, 드롭다운 선택 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from playwright.async_api import async_playwright, Page, Browser, TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import stealth_async
 from typing import Union
 from money_parser import to_won
 
@@ -24,8 +25,7 @@ class LowestPriceDto(BaseModel):
 async def extract_price(page: Page) -> Union[int, None]:
     try:
         print("[로그] 가격 추출 시작...")
-        await page.wait_for_load_state('networkidle', timeout=7000)
-
+        await page.wait_for_load_state('networkidle', timeout=10000)
         selectors = [
             "*:has-text('매물 최저가') >> .. >> .price-info-area .price-area .txt",
             ".price-info-area .price-area .txt",
@@ -33,7 +33,7 @@ async def extract_price(page: Page) -> Union[int, None]:
         for selector in selectors:
             elements = await page.locator(selector).all()
             for el in elements:
-                if await el.is_visible():
+                if await el.is_visible(timeout=1000):
                     price_text = await el.text_content()
                     if price_text and ('억' in price_text or '만' in price_text):
                         price = to_won(price_text.strip())
@@ -47,70 +47,53 @@ async def extract_price(page: Page) -> Union[int, None]:
 
 
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
-    print("\n--- [로그] 새로운 크롤링 요청 시작 ---")
+    print(f"\n--- [로그] 새로운 크롤링 요청 시작 (대상: bdsplanet.com, 스텔스 모드) ---")
     print(f"[로그] 요청 주소: {address}")
     async with async_playwright() as p:
         browser: Browser = await p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         )
-        print("[로그] Playwright 브라우저 시작 완료")
-
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-            java_script_enabled=True,
-            viewport={'width': 1920, 'height': 1080},
-            extra_http_headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1"
-            }
         )
         page: Page = await context.new_page()
+        await stealth_async(page)
+
         base_url = "https://www.bdsplanet.com"
-        page.set_default_timeout(30000)
-        print("[로그] 브라우저 컨텍스트 및 페이지 생성 완료")
+        page.set_default_timeout(45000)
 
         try:
             print("[로그] 1. 사이트 접속 시도...")
-            await page.goto(f"{base_url}/main.ytp", wait_until="domcontentloaded", timeout=20000)
+            await page.goto(base_url, wait_until="load", timeout=30000)
             print("[로그] 1. 사이트 접속 성공")
 
-            print("[로그] 2. 검색창 탐색 시작...")
-            search_input_selectors = [
-                "input#searchInput", "input[placeholder*='주소']",
-                "input[placeholder*='검색']", "input[type='search']", "input[type='text']"
-            ]
-            search_input = None
-            for selector in search_input_selectors:
-                locator = page.locator(selector).first
-                try:
-                    await locator.wait_for(state="visible", timeout=3000)
-                    search_input = locator
-                    print(f"[로그] 2. 검색창 찾음: '{selector}'")
-                    break
-                except PlaywrightTimeoutError:
-                    continue
-
-            if not search_input: raise Exception("검색창을 찾을 수 없습니다.")
-
-            await search_input.type(address, delay=150)
-            await search_input.press("Enter")
-            print("[로그] 2. 주소 입력 및 검색 실행 완료")
+            print("[로그] 2. 검색창 탐색 및 주소 입력...")
+            search_input = page.locator("input#searchInput").first
+            await search_input.wait_for(state="visible", timeout=15000)
+            await search_input.type(address, delay=120)
+            print("[로그] 2. 주소 입력 완료")
 
             # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
-            # 자동완성 클릭을 제거하고, 페이지가 스스로 이동하여 안정화될 때까지 기다립니다.
-            print("[로그] 3. 검색 후 페이지 이동 및 로딩 대기...")
-            await page.wait_for_load_state("networkidle", timeout=15000)
-            print("[로그] 3. 페이지 로딩 완료")
+            print("[로그] 3. 드롭다운 목록 대기 및 첫번째 항목 클릭 시도...")
+            # bdsplanet 사이트의 자동완성 드롭다운 목록 선택자
+            first_result_selector = "ul.d_list > li.list_item > a"
+            first_result = page.locator(first_result_selector).first
+
+            # 첫 번째 결과가 나타날 때까지 대기
+            await first_result.wait_for(state="visible", timeout=10000)
+
+            # 페이지 이동이 완료될 때까지 기다리면서 클릭 동작을 실행
+            await asyncio.gather(
+                page.wait_for_load_state("networkidle", timeout=20000),
+                first_result.click()
+            )
+            print("[로그] 3. 드롭다운 첫번째 항목 클릭 및 페이지 이동 성공")
             # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
 
             current_url = page.url
             print(f"[로그] 4. 현재 URL: {current_url}")
-            match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp)", current_url)
+            match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\\.ytp)", current_url)
 
             if match:
                 print("[로그] 4. URL 패턴 분석 성공")
