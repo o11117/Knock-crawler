@@ -1,4 +1,4 @@
-# main.py (봇 탐지 우회 및 안정성 강화 최종 버전)
+# main.py (HTTP 헤더 추가 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
@@ -25,7 +25,6 @@ async def extract_price(page: Page) -> Union[int, None]:
     try:
         await page.wait_for_load_state('networkidle', timeout=7000)
 
-        # 여러 가격 표시 형식을 순서대로 시도
         selectors = [
             "*:has-text('매물 최저가') >> .. >> .price-info-area .price-area .txt",
             ".price-info-area .price-area .txt",
@@ -47,23 +46,36 @@ async def extract_price(page: Page) -> Union[int, None]:
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
     async with async_playwright() as p:
         browser: Browser = await p.chromium.launch(
-            headless=True,
+            headless=True,  # 헤드리스 모드 활성화
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         )
+
+        # --- ▼▼▼▼▼ 봇 탐지 우회를 위한 헤더 추가 ▼▼▼▼▼ ---
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
             java_script_enabled=True,
-            viewport={'width': 1920, 'height': 1080}
+            viewport={'width': 1920, 'height': 1080},
+            # 일반적인 브라우저 헤더를 추가하여 봇처럼 보이지 않게 합니다.
+            extra_http_headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1"
+            }
         )
+        # --- ▲▲▲▲▲ 여기까지 수정 ▲▲▲▲▲ ---
+
         page: Page = await context.new_page()
         base_url = "https://www.bdsplanet.com"
         page.set_default_timeout(30000)
 
         try:
-            # 1. 사이트 접속
             await page.goto(f"{base_url}/main.ytp", wait_until="domcontentloaded", timeout=20000)
 
-            # 2. 검색 실행 (더 유연한 선택자)
             search_input_selectors = [
                 "input#searchInput", "input[placeholder*='주소']",
                 "input[placeholder*='검색']", "input[type='search']", "input[type='text']"
@@ -85,20 +97,17 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             await page.wait_for_timeout(500)
             await search_input.press("Enter")
 
-            # 3. 자동완성 목록 클릭
             first_result_selector = "ul.d_list > li.list_item > a"
             first_result = page.locator(first_result_selector).first
-            await first_result.wait_for(state="visible", timeout=30000)
+            await first_result.wait_for(state="visible", timeout=10000)
             await first_result.click()
             await page.wait_for_load_state("networkidle", timeout=15000)
 
-            # 4. URL 분석 및 가격 추출
             current_url = page.url
             match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp)", current_url)
 
             if match:
                 base_pattern, _, suffix = match.groups()
-                # (이하 로직은 동일)
                 sale_url = f"{base_url}{base_pattern}1{suffix}"
                 await page.goto(sale_url, wait_until="domcontentloaded")
                 sale_price = await extract_price(page)
@@ -112,7 +121,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
                 return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {current_url}")
 
         except Exception as e:
-            error_message = str(e).splitlines()[0]  # 에러 메시지를 간결하게
+            error_message = str(e).splitlines()[0]
             return LowestPriceDto(address=address, error=f"크롤링 오류: {error_message}")
         finally:
             await browser.close()
