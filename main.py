@@ -1,4 +1,4 @@
-# main.py (자동완성 의존성 제거 최종 버전)
+# main.py (검색 버튼 클릭 로직 추가 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
@@ -80,33 +80,24 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             print("[로그] 1. 사이트 접속 성공")
 
             print("[로그] 2. 검색창 탐색 시작...")
-            search_input_selectors = [
-                "input#searchInput", "input[placeholder*='주소']",
-                "input[placeholder*='검색']", "input[type='search']", "input[type='text']"
-            ]
-            search_input = None
-            for selector in search_input_selectors:
-                locator = page.locator(selector).first
-                try:
-                    await locator.wait_for(state="visible", timeout=3000)
-                    search_input = locator
-                    print(f"[로그] 2. 검색창 찾음: '{selector}'")
-                    break
-                except PlaywrightTimeoutError:
-                    continue
+            search_input = page.locator("input#searchInput").first
+            await search_input.wait_for(state="visible", timeout=5000)
+            print("[로그] 2. 검색창 찾음")
 
-            if not search_input: raise Exception("검색창을 찾을 수 없습니다.")
-
-            await search_input.type(address, delay=150)
-            await search_input.press("Enter")
-            print("[로그] 2. 주소 입력 및 검색 실행 완료")
+            await search_input.type(address, delay=100)
+            await page.wait_for_timeout(200)
 
             # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
-            # 자동완성 클릭을 제거하고, 페이지가 스스로 이동하여 안정화될 때까지 기다립니다.
+            # Enter 키 대신 검색 버튼을 직접 클릭합니다.
+            print("[로그] 2a. 검색 버튼 클릭 시도...")
+            search_button = page.locator("button.btn_search").first
+            await search_button.click()
+            print("[로그] 2a. 검색 버튼 클릭 성공")
+            # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
+
             print("[로그] 3. 검색 후 페이지 이동 및 로딩 대기...")
             await page.wait_for_load_state("networkidle", timeout=15000)
             print("[로그] 3. 페이지 로딩 완료")
-            # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
 
             current_url = page.url
             print(f"[로그] 4. 현재 URL: {current_url}")
