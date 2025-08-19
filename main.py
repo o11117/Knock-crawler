@@ -1,4 +1,4 @@
-# main.py (최종 안정화 버전)
+# main.py (JavaScript 강제 클릭 최종 버전)
 import asyncio
 import re
 from fastapi import FastAPI, HTTPException
@@ -68,7 +68,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
         )
         page: Page = await context.new_page()
         base_url = "https://www.bdsplanet.com"
-        page.set_default_timeout(30000)
+        page.set_default_timeout(35000)  # 기본 타임아웃 35초로 증가
         print("[로그] 브라우저 컨텍스트 및 페이지 생성 완료")
 
         try:
@@ -76,23 +76,18 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             await page.goto(f"{base_url}/main.ytp", wait_until="load", timeout=25000)
             print("[로그] 1. 사이트 접속 및 기본 로딩 완료")
 
-            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
-            print("[로그] 2. 검색창이 나타날 때까지 대기...")
-            # Playwright가 여러 선택자를 동시에 확인하도록 하여 가장 먼저 찾아지는 것을 사용
-            search_input_selector = ", ".join([
-                "input#searchInput", "input[placeholder*='주소']",
-                "input[placeholder*='검색']", "input[type='search']", "input[type='text']"
-            ])
-            search_input = page.locator(search_input_selector).first
-            await search_input.wait_for(state="visible", timeout=15000)  # 대기 시간 15초로 증가
+            print("[로그] 2. 검색창 탐색 시작...")
+            search_input = page.locator("input#searchInput").first
+            await search_input.wait_for(state="visible", timeout=15000)
             print("[로그] 2. 검색창 찾음")
 
             await search_input.type(address, delay=100)
 
-            print("[로그] 2a. 검색 버튼 클릭 시도...")
-            search_button = page.locator("button.btn_search").first
-            await search_button.click()
-            print("[로그] 2a. 검색 버튼 클릭 성공")
+            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
+            print("[로그] 2a. JavaScript로 검색 버튼 강제 클릭 시도...")
+            # Playwright의 click 대신, JavaScript를 직접 실행하여 클릭 이벤트를 발생시킴
+            await page.evaluate("document.querySelector('button.btn_search').click()")
+            print("[로그] 2a. 검색 버튼 강제 클릭 성공")
             # --- ▲▲▲▲▲ 핵심 수정 부분 ▲▲▲▲▲ ---
 
             print("[로그] 3. 검색 결과 페이지 로딩 대기...")
