@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from playwright.async_api import async_playwright, Page, Browser, TimeoutError
 from typing import Union
 from money_parser import to_won
+import traceback
 
 app = FastAPI()
 
@@ -116,8 +117,21 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             else:
                 return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {final_url}")
 
+
         except Exception as e:
+
+            # ✨ [핵심 수정] 오류 발생 시 상세한 Traceback을 콘솔에 출력합니다.
+
+            print("=====================================")
+
+            print(f"!!! CRITICAL ERROR IN CRAWLER: {e}")
+
+            traceback.print_exc()  # 오류의 전체 경로를 출력
+
+            print("=====================================")
+
             return LowestPriceDto(address=address, error=f"크롤링 오류 발생: {e}")
+
         finally:
             await context.close()
             await browser.close()
@@ -132,5 +146,4 @@ async def crawl_real_estate(address: str):
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)
