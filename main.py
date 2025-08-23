@@ -95,6 +95,9 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             await page.locator(autocomplete_selector).first.click()
             print(f"[{time.time() - start_time:.2f}s] ✅ 검색 실행 완료.")
 
+            current_url = page.url
+            print(f"[{time.time() - start_time:.2f}s] ℹ️ 현재 URL: {current_url}")
+
             final_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
             await page.wait_for_url(final_url_pattern, timeout=60000)
             final_url = page.url
