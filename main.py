@@ -1,4 +1,4 @@
-# main.py (리소스 및 의존성 문제 대응 버전)
+# main.py (Firefox 사용 버전)
 import asyncio
 import re
 import time
@@ -43,16 +43,22 @@ async def extract_price(page: Page) -> Union[int, None]:
 
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
     async with async_playwright() as p:
-        browser: Browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled"
-            ]
+
+        # 프록시 설정은 그대로 둡니다 (필요시 주석 해제하여 사용)
+        # proxy_settings = {
+        #     "server": "http://YOUR_PROXY_IP:YOUR_PROXY_PORT",
+        #     "username": "YOUR_USERNAME",
+        #     "password": "YOUR_PASSWORD"
+        # }
+
+        # ✨ [수정] p.chromium.launch를 p.firefox.launch로 변경합니다.
+        browser: Browser = await p.firefox.launch(
+            headless=True
+            # proxy=proxy_settings # 프록시 사용 시 이 줄의 주석을 해제하세요.
         )
         context = await browser.new_context(
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+            # Firefox User-Agent
             viewport={'width': 1920, 'height': 1080},
             locale='ko-KR'
         )
@@ -60,17 +66,13 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
         base_url = "https://www.bdsplanet.com"
 
         try:
-            # 1. 사이트 접속 (긴 타임아웃 유지)
-            # 서버의 느린 브라우저 실행 속도를 감안하여 timeout은 넉넉하게 유지
-            await page.goto(f"{base_url}/main.ytp", wait_until="networkidle", timeout=30000)
+            await page.goto(f"{base_url}/main.ytp", wait_until="networkidle", timeout=90000)
 
-            # 2. 검색 실행
             search_input = page.locator("input[placeholder*='주소'], input[placeholder*='검색']").first
             await search_input.wait_for(state="visible", timeout=10000)
             await search_input.fill(address)
             await search_input.press("Enter")
 
-            # 3. URL 변경 폴링(Polling) 루프
             expected_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
             end_time = time.time() + 15
             final_url = None
@@ -84,7 +86,6 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             if not final_url:
                 raise TimeoutError(f"15초 내에 검색 결과 페이지로 이동하지 못했습니다. 현재 URL: {page.url}")
 
-            # 4. URL 분석 및 가격 추출
             match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp.*)", final_url)
             if match:
                 base_pattern, _, suffix = match.groups()
@@ -102,7 +103,6 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
                 return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {final_url}")
 
         except Exception as e:
-            # ✨ [수정] 스크린샷 기능 제거, 오류 메시지만 반환
             return LowestPriceDto(address=address, error=f"크롤링 오류 발생: {e}")
         finally:
             await context.close()
