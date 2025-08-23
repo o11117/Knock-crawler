@@ -83,6 +83,14 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
         start_url = "https://www.bdsplanet.com/map/realprice_map.ytp?ubt_mode=tms"
 
         try:
+            # ✨ [핵심 추가] IP 주소 확인 로직
+            print("=====================================")
+            print(">>> 현재 IP 주소를 확인합니다...")
+            await page.goto("https://httpbin.org/ip", wait_until="domcontentloaded")
+            ip_info = await page.locator("body").text_content()
+            print(f">>> 감지된 IP 주소: {ip_info.strip()}")
+            print("=====================================")
+
             await page.goto(start_url, wait_until="networkidle", timeout=90000)
 
             # ✨ [핵심 수정 2] 지도 페이지의 검색창을 찾아 주소를 입력하고 'Enter'를 누릅니다.
