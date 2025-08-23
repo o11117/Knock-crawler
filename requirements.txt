@@ -8,3 +8,4 @@ pydantic==2.7.1
 # Web Crawling & Automation
 playwright==1.44.0
 playwright-stealth==1.0.6
+money-parser
