@@ -1,4 +1,4 @@
-# main.py (팝업 강제 제거 최종 안정화 버전)
+# main.py (초기 로딩 안정화 최종 버전)
 import asyncio
 import os
 import re
@@ -43,66 +43,62 @@ async def extract_price(page: Page) -> Union[int, None]:
 
 
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
-    async with async_playwright() as p:
-        proxy_host = os.getenv("PROXY_HOST")
-        proxy_port = os.getenv("PROXY_PORT")
-        proxy_username = os.getenv("PROXY_USERNAME")
-        proxy_password = os.getenv("PROXY_PASSWORD")
+    start_time = time.time()
+    print(f"🚀 '{address}' 크롤링 시작...")
 
+    async with async_playwright() as p:
+        proxy_host, proxy_port, proxy_username, proxy_password = (
+            os.getenv("PROXY_HOST"),
+            os.getenv("PROXY_PORT"),
+            os.getenv("PROXY_USERNAME"),
+            os.getenv("PROXY_PASSWORD"),
+        )
         proxy_settings = None
         if proxy_host and proxy_port:
             server = f"http://{proxy_host}:{proxy_port}"
             proxy_settings = {"server": server, "username": proxy_username, "password": proxy_password}
 
-        browser: Browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
-            proxy=proxy_settings
-        )
+        browser: Browser = await p.chromium.launch(headless=True, args=["--no-sandbox"], proxy=proxy_settings)
         context = await browser.new_context(
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            viewport={'width': 1920, 'height': 1080},
-            locale='ko-KR',
             ignore_https_errors=True
         )
         page: Page = await context.new_page()
         base_url = "https://www.bdsplanet.com"
 
         try:
-            print("🔍 메인 페이지 접속 시도...")
-            await page.goto(f"{base_url}/main.ytp", wait_until="domcontentloaded", timeout=60000)
-            print("✅ 메인 페이지 접속 완료.")
+            print(f"[{time.time() - start_time:.2f}s] 🔍 메인 페이지 접속 시도...")
+            # ✨ [수정 1] 페이지 로딩이 완료될 때까지 기다리지 않고, 일단 접속만 시도합니다.
+            await page.goto(f"{base_url}/main.ytp", timeout=60000)
+            print(f"[{time.time() - start_time:.2f}s] ✅ 페이지 기본 로딩 완료.")
 
-            # ✨ [수정 1] 광고 팝업을 자바스크립트로 강제 제거합니다.
+            # ✨ [수정 2] 페이지의 핵심 요소인 '검색창'이 나타날 때까지 기다립니다.
+            search_input_selector = "input[placeholder*='주소'], input[placeholder*='검색']"
+            search_input = page.locator(search_input_selector).first
+            await search_input.wait_for(state="visible", timeout=60000)
+            print(f"[{time.time() - start_time:.2f}s] ✅ 검색창 표시 확인.")
+
+            await asyncio.sleep(1)  # 페이지 스크립트가 안정화될 시간을 줍니다.
+
             try:
-                # 광고 팝업 요소가 나타날 때까지 최대 7초 기다립니다.
                 ad_pop_selector = ".pop.adPop"
                 await page.wait_for_selector(ad_pop_selector, state="visible", timeout=7000)
-
-                # 자바스크립트를 실행하여 해당 요소를 DOM에서 완전히 삭제합니다.
                 await page.evaluate(f"document.querySelector('{ad_pop_selector}').remove();")
-                print("✅ 광고 팝업을 강제로 제거했습니다.")
+                print(f"[{time.time() - start_time:.2f}s] ✅ 광고 팝업 제거 완료.")
             except TimeoutError:
-                print("ℹ️ 광고 팝업이 감지되지 않았습니다.")
+                print(f"[{time.time() - start_time:.2f}s] ℹ️ 광고 팝업 감지되지 않음.")
 
-            search_input = page.locator("input[placeholder*='주소'], input[placeholder*='검색']").first
-            await search_input.wait_for(state="visible", timeout=10000)
-
-            # ✨ [수정 2] 자동완성 목록 클릭 방식으로 검색합니다.
             await search_input.fill(address)
-            print(f"✅ 주소 '{address}' 입력 완료.")
 
             autocomplete_selector = ".ui-autocomplete .ui-menu-item"
             await page.wait_for_selector(autocomplete_selector, timeout=10000)
-            print("✅ 자동완성 목록 표시됨.")
-
             await page.locator(autocomplete_selector).first.click()
-            print("✅ 자동완성 첫 번째 항목 클릭 완료.")
+            print(f"[{time.time() - start_time:.2f}s] ✅ 검색 실행 완료.")
 
             final_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
             await page.wait_for_url(final_url_pattern, timeout=60000)
             final_url = page.url
-            print(f"✅ 최종 URL 도착: {final_url}")
+            print(f"[{time.time() - start_time:.2f}s] ✅ 최종 URL 도착: {final_url}")
 
             match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp.*)", final_url)
             if match:
