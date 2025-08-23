@@ -69,7 +69,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled"
             ],
-            proxy=proxy_settings  # ✨ [수정] 구성된 프록시 설정을 전달합니다.
+            proxy=proxy_settings
         )
         context = await browser.new_context(
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -88,20 +88,16 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             await search_input.fill(address)
             await search_input.press("Enter")
 
-            expected_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
-            end_time = time.time() + 15
-            final_url = None
-            while time.time() < end_time:
-                current_url = page.url
-                if expected_url_pattern.search(current_url):
-                    final_url = current_url
-                    break
-                await asyncio.sleep(0.5)
+            # ✨ [핵심 수정] URL 변경을 기다리는 대신, 검색 결과 페이지의 특정 패턴을 기다립니다.
+            # 타임아웃도 30초로 넉넉하게 늘립니다.
+            expected_url_pattern = re.compile(r"/map/realprice_map/[^/]+/")
+            await page.wait_for_url(expected_url_pattern, timeout=30000)
+            final_url = page.url
 
-            if not final_url:
-                raise TimeoutError(f"15초 내에 검색 결과 페이지로 이동하지 못했습니다. 현재 URL: {page.url}")
-
+            # match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp.*)", final_url)
+            # ✨ [수정] URL 패턴을 더 유연하게 변경합니다.
             match = re.search(r"(/map/realprice_map/.*/)([12])(/.*)", final_url)
+
             if match:
                 base_pattern, _, suffix = match.groups()
                 sale_url = f"{base_url}{base_pattern}1{suffix}"
@@ -117,7 +113,6 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             else:
                 return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {final_url}")
 
-
         except Exception as e:
 
             # ✨ [핵심 수정] 오류 발생 시 상세한 Traceback을 콘솔에 출력합니다.
@@ -131,7 +126,6 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             print("=====================================")
 
             return LowestPriceDto(address=address, error=f"크롤링 오류 발생: {e}")
-
         finally:
             await context.close()
             await browser.close()
