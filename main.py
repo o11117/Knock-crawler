@@ -1,4 +1,4 @@
-# main.py (URL 변화 관찰 및 디버깅 최종 버전)
+# main.py (최종 안정화 버전)
 import asyncio
 import os
 import re
@@ -11,7 +11,6 @@ from money_parser import to_won
 
 app = FastAPI()
 
-
 class LowestPriceDto(BaseModel):
     address: str
     salePrice: Union[int, None] = None
@@ -19,9 +18,7 @@ class LowestPriceDto(BaseModel):
     sourceUrl: Union[str, None] = None
     error: Union[str, None] = None
 
-
 async def extract_price(page: Page) -> Union[int, None]:
-    # ... (extract_price 함수는 이전과 동일)
     try:
         await page.wait_for_selector(".price-info-area", timeout=7000)
         label = page.locator("*:has-text('매물 최저가')").first
@@ -42,10 +39,8 @@ async def extract_price(page: Page) -> Union[int, None]:
         print(f"가격 추출 중 오류: {e}")
     return None
 
-
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
     async with async_playwright() as p:
-        # ... (프록시 설정은 동일)
         proxy_host = os.getenv("PROXY_HOST")
         proxy_port = os.getenv("PROXY_PORT")
         proxy_username = os.getenv("PROXY_USERNAME")
@@ -54,7 +49,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
         proxy_settings = None
         if proxy_host and proxy_port:
             server = f"http://{proxy_host}:{proxy_port}"
-            proxy_settings = {"server": server, "username": proxy_username, "password": proxy_password}
+            proxy_settings = { "server": server, "username": proxy_username, "password": proxy_password }
 
         browser: Browser = await p.chromium.launch(
             headless=True,
@@ -76,28 +71,15 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             search_input = page.locator("input[placeholder*='주소'], input[placeholder*='검색']").first
             await search_input.wait_for(state="visible", timeout=10000)
             await search_input.fill(address)
-
-            print("🔍 검색 실행 (Enter Press)")
             await search_input.press("Enter")
 
-            # ✨ [수정된 부분] URL 변화를 단계적으로 관찰합니다.
-
-            # 1. 검색 후 첫 페이지 로딩을 기다립니다 (중간 URL: ...tms 로 이동).
-            print("⏳ 1단계: 중간 페이지 로딩을 기다립니다...")
-            await page.wait_for_load_state("domcontentloaded", timeout=30000)
-            intermediate_url = page.url
-            print(f"✅ 1단계 완료. 중간 URL: {intermediate_url}")
-
-            # 2. JS 리디렉션으로 인한 두 번째 페이지 로딩을 기다립니다 (최종 URL로 이동).
-            print("⏳ 2단계: 최종 페이지 로딩을 기다립니다...")
-            await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            # ✨ [수정된 부분] 최종 URL 패턴이 나타날 때까지 최대 60초간 '끈기 있게' 기다립니다.
+            final_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
+            await page.wait_for_url(final_url_pattern, timeout=60000)
             final_url = page.url
-            print(f"✅ 2단계 완료. 최종적으로 도착한 URL: {final_url}")
 
-            # 3. 최종 도착한 URL이 우리가 기대한 패턴과 일치하는지 확인합니다.
             match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp.*)", final_url)
             if match:
-                print("👍 최종 URL이 예상 패턴과 일치합니다.")
                 base_pattern, _, suffix = match.groups()
                 sale_url = f"{base_url}{base_pattern}1{suffix}"
                 rent_url = f"{base_url}{base_pattern}2{suffix}"
@@ -110,8 +92,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
 
                 return LowestPriceDto(address=address, salePrice=sale_price, rentPrice=rent_price, sourceUrl=sale_url)
             else:
-                # 패턴이 일치하지 않으면 오류를 발생시켜 정확한 최종 URL을 확인합니다.
-                raise TimeoutError(f"URL 패턴 분석 실패: 최종 URL이 예상과 다릅니다. 실제 최종 URL: {final_url}")
+                return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {final_url}")
 
         except Exception as e:
             return LowestPriceDto(address=address, error=f"크롤링 오류 발생: {e}")
