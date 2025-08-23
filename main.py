@@ -1,9 +1,9 @@
-# main.py (Pydantic V2 호환 최종 버전)
+# main.py (초기 로딩 안정화 최종 버전)
 import asyncio
 import os
 import re
 import time
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from playwright.async_api import async_playwright, Page, Browser, TimeoutError
 from typing import Union
@@ -43,61 +43,62 @@ async def extract_price(page: Page) -> Union[int, None]:
 
 
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
-    async with async_playwright() as p:
-        proxy_host = os.getenv("PROXY_HOST")
-        proxy_port = os.getenv("PROXY_PORT")
-        proxy_username = os.getenv("PROXY_USERNAME")
-        proxy_password = os.getenv("PROXY_PASSWORD")
+    start_time = time.time()
+    print(f"🚀 '{address}' 크롤링 시작...")
 
+    async with async_playwright() as p:
+        proxy_host, proxy_port, proxy_username, proxy_password = (
+            os.getenv("PROXY_HOST"),
+            os.getenv("PROXY_PORT"),
+            os.getenv("PROXY_USERNAME"),
+            os.getenv("PROXY_PASSWORD"),
+        )
         proxy_settings = None
         if proxy_host and proxy_port:
             server = f"http://{proxy_host}:{proxy_port}"
             proxy_settings = {"server": server, "username": proxy_username, "password": proxy_password}
 
-        browser: Browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
-            proxy=proxy_settings
-        )
+        browser: Browser = await p.chromium.launch(headless=True, args=["--no-sandbox"], proxy=proxy_settings)
         context = await browser.new_context(
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            viewport={'width': 1920, 'height': 1080},
-            locale='ko-KR',
             ignore_https_errors=True
         )
         page: Page = await context.new_page()
         base_url = "https://www.bdsplanet.com"
 
         try:
-            print("🔍 메인 페이지 접속 시도...")
-            await page.goto(f"{base_url}/main.ytp", wait_until="domcontentloaded", timeout=60000)
-            print("✅ 메인 페이지 접속 완료.")
+            print(f"[{time.time() - start_time:.2f}s] 🔍 메인 페이지 접속 시도...")
+            # ✨ [수정 1] 페이지 로딩이 완료될 때까지 기다리지 않고, 일단 접속만 시도합니다.
+            await page.goto(f"{base_url}/main.ytp", timeout=60000)
+            print(f"[{time.time() - start_time:.2f}s] ✅ 페이지 기본 로딩 완료.")
+
+            # ✨ [수정 2] 페이지의 핵심 요소인 '검색창'이 나타날 때까지 기다립니다.
+            search_input_selector = "input[placeholder*='주소'], input[placeholder*='검색']"
+            search_input = page.locator(search_input_selector).first
+            await search_input.wait_for(state="visible", timeout=60000)
+            print(f"[{time.time() - start_time:.2f}s] ✅ 검색창 표시 확인.")
+
+            await asyncio.sleep(1)  # 페이지 스크립트가 안정화될 시간을 줍니다.
 
             try:
                 ad_pop_selector = ".pop.adPop"
                 await page.wait_for_selector(ad_pop_selector, state="visible", timeout=7000)
                 await page.evaluate(f"document.querySelector('{ad_pop_selector}').remove();")
-                print("✅ 광고 팝업을 강제로 제거했습니다.")
+                print(f"[{time.time() - start_time:.2f}s] ✅ 광고 팝업 제거 완료.")
             except TimeoutError:
-                print("ℹ️ 광고 팝업이 감지되지 않았습니다.")
-
-            search_input = page.locator("input[placeholder*='주소'], input[placeholder*='검색']").first
-            await search_input.wait_for(state="visible", timeout=10000)
+                print(f"[{time.time() - start_time:.2f}s] ℹ️ 광고 팝업 감지되지 않음.")
 
             await search_input.fill(address)
-            print(f"✅ 주소 '{address}' 입력 완료.")
 
             autocomplete_selector = ".ui-autocomplete .ui-menu-item"
             await page.wait_for_selector(autocomplete_selector, timeout=10000)
-            print("✅ 자동완성 목록 표시됨.")
-
             await page.locator(autocomplete_selector).first.click()
-            print("✅ 자동완성 첫 번째 항목 클릭 완료.")
+            print(f"[{time.time() - start_time:.2f}s] ✅ 검색 실행 완료.")
 
             final_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
             await page.wait_for_url(final_url_pattern, timeout=60000)
             final_url = page.url
-            print(f"✅ 최종 URL 도착: {final_url}")
+            print(f"[{time.time() - start_time:.2f}s] ✅ 최종 URL 도착: {final_url}")
 
             match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp.*)", final_url)
             if match:
@@ -122,25 +123,11 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             await browser.close()
 
 
-async def run_crawling_and_log_result(address: str):
-    print(f"🚀 '{address}'에 대한 백그라운드 크롤링 작업을 시작합니다.")
-    result = await fetch_lowest_by_address(address)
-    print("--- 최종 크롤링 결과 ---")
-
-    # ✨ [수정] Pydantic V2에 맞는 model_dump_json() 함수를 사용합니다.
-    print(result.model_dump_json(indent=2))
-
-    print("--- 작업 완료 ---")
-
-
-@app.get("/crawl")
-async def crawl_real_estate(address: str, background_tasks: BackgroundTasks):
+@app.get("/crawl", response_model=LowestPriceDto)
+async def crawl_real_estate(address: str):
     if not address:
         raise HTTPException(status_code=400, detail="주소를 입력해주세요.")
-
-    background_tasks.add_task(run_crawling_and_log_result, address)
-
-    return {"message": "크롤링 작업이 시작되었습니다. 잠시 후 서버 로그를 확인하세요."}
+    return await fetch_lowest_by_address(address)
 
 
 if __name__ == "__main__":
