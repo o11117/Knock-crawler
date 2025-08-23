@@ -45,7 +45,7 @@ async def extract_prices_from_popup(page: Page) -> dict:
     # 테이블의 행(tr)이 아니라, 가격 정보가 담기는 파란색 텍스트의 셀(td.table_txt_blue)이
     # 실제로 렌더링될 때까지 최대 20초간 기다립니다.
     try:
-        await page.wait_for_selector("#areaList > tr > td.table_txt_blue", timeout=40000)
+        await page.wait_for_selector("#areaList > tr > td.table_txt_blue", timeout=20000)
     except TimeoutError:
         print("가격 정보 테이블이 시간 내에 로드되지 않았습니다. 해당 주소의 시세 정보가 없을 수 있습니다.")
         return {}  # 타임아웃 발생 시 빈 딕셔너리 반환
@@ -79,10 +79,25 @@ async def extract_prices_from_popup(page: Page) -> dict:
 # 크롤링 로직을 담당하는 메인 함수
 async def fetch_prices_from_rtech(address: str) -> RtechPriceDto:
     async with async_playwright() as p:
+
+        # 프록시 서버 정보 (인증 정보가 없을 경우)
+        proxy_settings = {
+            "server": "http://123.141.181.8:5031"
+        }
+
+        # 프록시 서버 정보 (사용자 이름과 암호가 있을 경우)
+        # proxy_settings = {
+        #     "server": "http://프록시_IP주소:포트번호",
+        #     "username": "사용자이름",
+        #     "password": "비밀번호"
+        # }
+
         browser: Browser = await p.chromium.launch(
-            headless=True,  # 실제 운영 시에는 True로 변경하는 것이 좋습니다.
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            proxy=proxy_settings  # ✨ 프록시 설정 추가
         )
+
         context = await browser.new_context(
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             locale='ko-KR'
