@@ -1,4 +1,4 @@
-# main.py (최종 디버깅 및 안정화 버전)
+# main.py (초기 로딩 최적화 최종 버전)
 import asyncio
 import os
 import re
@@ -78,12 +78,18 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
 
         try:
             print(f"[{time.time() - start_time:.2f}s] 🔍 메인 페이지 접속 시도...")
-            await page.goto(f"{base_url}/main.ytp", wait_until="domcontentloaded", timeout=60000)
-            await remove_ad_if_present(page)
-            print(f"[{time.time() - start_time:.2f}s] ✅ 메인 페이지 접속 완료.")
+            # ✨ [수정] 페이지 로딩이 완료될 때까지 기다리지 않고, 일단 접속만 시도합니다.
+            await page.goto(f"{base_url}/main.ytp", timeout=60000)
+            print(f"[{time.time() - start_time:.2f}s] ✅ 페이지 기본 HTML 로딩 완료.")
 
-            search_input = page.locator("input[placeholder*='주소'], input[placeholder*='검색']").first
-            await search_input.wait_for(state="visible", timeout=10000)
+            # ✨ [수정] 페이지의 핵심 요소인 '검색창'이 나타날 때까지 기다립니다.
+            # 이것이 실질적인 '페이지 로딩 완료' 신호입니다.
+            search_input_selector = "input[placeholder*='주소'], input[placeholder*='검색']"
+            search_input = page.locator(search_input_selector).first
+            await search_input.wait_for(state="visible", timeout=60000)
+            print(f"[{time.time() - start_time:.2f}s] ✅ 검색창 표시 확인.")
+
+            await remove_ad_if_present(page)
 
             await search_input.fill(address)
 
@@ -94,11 +100,11 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             await page.locator(autocomplete_selector).first.click()
             print(f"[{time.time() - start_time:.2f}s] ✅ 검색 실행 (자동완성 클릭).")
 
-            # ✨ [수정된 부분] 최종 URL을 기다리기 전, 현재 URL을 먼저 출력합니다.
+            final_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
+
             current_url_before_wait = page.url
             print(f"[{time.time() - start_time:.2f}s] ℹ️ 현재 URL: {current_url_before_wait}. 이제부터 최종 URL 패턴을 기다립니다...")
 
-            final_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
             await page.wait_for_url(final_url_pattern, timeout=60000)
             final_url = page.url
             print(f"[{time.time() - start_time:.2f}s] ✅ 최종 URL 도착: {final_url}")
@@ -110,11 +116,9 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
                 rent_url = f"{base_url}{base_pattern}2{suffix}"
 
                 await page.goto(sale_url, wait_until="domcontentloaded")
-                await remove_ad_if_present(page)
                 sale_price = await extract_price(page)
 
                 await page.goto(rent_url, wait_until="domcontentloaded")
-                await remove_ad_if_present(page)
                 rent_price = await extract_price(page)
 
                 return LowestPriceDto(address=address, salePrice=sale_price, rentPrice=rent_price, sourceUrl=sale_url)
