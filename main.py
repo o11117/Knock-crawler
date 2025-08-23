@@ -43,11 +43,22 @@ async def extract_price(page: Page) -> Union[int, None]:
 
 async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
     async with async_playwright() as p:
+
+        # 프록시 설정은 그대로 둡니다 (필요시 주석 해제하여 사용)
+        # proxy_settings = {
+        #     "server": "http://YOUR_PROXY_IP:YOUR_PROXY_PORT",
+        #     "username": "YOUR_USERNAME",
+        #     "password": "YOUR_PASSWORD"
+        # }
+
+        # ✨ [수정] p.chromium.launch를 p.firefox.launch로 변경합니다.
         browser: Browser = await p.firefox.launch(
             headless=True
+            # proxy=proxy_settings # 프록시 사용 시 이 줄의 주석을 해제하세요.
         )
         context = await browser.new_context(
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+            # Firefox User-Agent
             viewport={'width': 1920, 'height': 1080},
             locale='ko-KR'
         )
@@ -57,26 +68,10 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
         try:
             await page.goto(f"{base_url}/main.ytp", wait_until="networkidle", timeout=90000)
 
-            # ✨ [수정 1] 팝업 처리 로직 추가
-            # 페이지에 접속한 후, 검색창을 찾기 전에 팝업이 있는지 확인하고 닫습니다.
-            try:
-                # 일반적인 '닫기', '오늘 하루 보지 않기' 등의 버튼 선택자
-                popup_close_button = page.locator("button:has-text('닫기'), button:has-text('오늘 하루 보지 않기')").first
-                # 팝업이 5초 안에 나타나면 클릭
-                await popup_close_button.click(timeout=5000)
-                print("팝업을 감지하고 닫았습니다.")
-            except TimeoutError:
-                # 5초 동안 팝업이 나타나지 않으면 그냥 통과
-                print("팝업이 감지되지 않았습니다.")
-
-            # ✨ [수정 2] 검색창 대기 시간 증가
             search_input = page.locator("input[placeholder*='주소'], input[placeholder*='검색']").first
-            await search_input.wait_for(state="visible", timeout=20000)  # 10초 -> 20초
-
+            await search_input.wait_for(state="visible", timeout=10000)
             await search_input.fill(address)
             await search_input.press("Enter")
-
-            # ... (이하 코드는 동일) ...
 
             expected_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
             end_time = time.time() + 15
