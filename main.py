@@ -82,7 +82,7 @@ async def fetch_prices_from_rtech(address: str) -> RtechPriceDto:
 
         # 프록시 서버 정보 (인증 정보가 없을 경우)
         proxy_settings = {
-            "server": "http://66.36.234.130:1339"
+            "server": "http://123.141.181.8:5031"
         }
 
         # 프록시 서버 정보 (사용자 이름과 암호가 있을 경우)
