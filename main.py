@@ -45,7 +45,7 @@ async def extract_prices_from_popup(page: Page) -> dict:
     # 테이블의 행(tr)이 아니라, 가격 정보가 담기는 파란색 텍스트의 셀(td.table_txt_blue)이
     # 실제로 렌더링될 때까지 최대 20초간 기다립니다.
     try:
-        await page.wait_for_selector("#areaList > tr > td.table_txt_blue", timeout=20000)
+        await page.wait_for_selector("#areaList > tr > td.table_txt_blue", timeout=40000)
     except TimeoutError:
         print("가격 정보 테이블이 시간 내에 로드되지 않았습니다. 해당 주소의 시세 정보가 없을 수 있습니다.")
         return {}  # 타임아웃 발생 시 빈 딕셔너리 반환
