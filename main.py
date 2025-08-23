@@ -9,6 +9,8 @@ from playwright.async_api import async_playwright, Page, Browser, TimeoutError
 from typing import Union
 from money_parser import to_won
 import traceback
+import asyncio
+from playwright.async_api import async_playwright, TimeoutError
 
 app = FastAPI()
 
@@ -26,7 +28,7 @@ async def extract_price(page: Page) -> Union[int, None]:
         await page.wait_for_selector(".price-info-area", timeout=7000)
         label = page.locator("*:has-text('매물 최저가')").first
         if await label.count() > 0:
-            price_area = label.locator("..").locator(".price-info-area .price-area .txt")
+            price_area = label.locator(".." ).locator(".price-info-area .price-area .txt")
             if await price_area.count() > 0:
                 price_text = await price_area.first.text_content()
                 if price_text and ('억' in price_text or '만' in price_text):
@@ -95,10 +97,40 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
 
             # ✨ [핵심 수정 2] 지도 페이지의 검색창을 찾아 주소를 입력하고 'Enter'를 누릅니다.
             search_input_selector = 'input[name="search_keyword"]'
-            await page.wait_for_selector(search_input_selector, timeout=10000)
-            search_input = page.locator(search_input_selector)
+
+            # 안정성 향상: DOM에 붙을 때까지 -> visible -> 입력
+            try:
+                await page.wait_for_selector(search_input_selector, state="attached", timeout=30000)
+                await page.wait_for_selector(search_input_selector, state="visible", timeout=30000)
+                search_input = page.locator(search_input_selector).first
+            except TimeoutError:
+                # iframe 내부 가능성 대응
+                search_input = None
+                for frame in page.frames:
+                    try:
+                        await frame.wait_for_selector(search_input_selector, state="visible", timeout=5000)
+                        search_input = frame.locator(search_input_selector).first
+                        if search_input:
+                            break
+                    except Exception:
+                        pass
+                if not search_input:
+                    raise
+            # 항상 뜨는 팝업 닫기 로직 추가
+            try:
+                popup_close = page.locator("div.pop button.close")
+                if await popup_close.count() > 0:
+                    await popup_close.click()
+                    await page.wait_for_timeout(500)  # 애니메이션 대기
+            except Exception:
+                pass
+
+            # 검색창 입력 및 검색 실행 (클릭 대신 fill 사용)
             await search_input.fill(address)
             await search_input.press("Enter")
+
+            # 주소 검색 후 SPA 리렌더 안정화
+            await page.wait_for_load_state('networkidle')
 
             # ✨ [핵심 수정 3] URL이 바뀌기를 30초 동안 안정적으로 기다립니다.
             expected_url_pattern = re.compile(r"/map/realprice_map/[^/]+/")
@@ -125,10 +157,23 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             else:
                 return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {final_url}")
 
+            # 아래는 에러 발생 시 디버깅을 위한 상세 로그입니다.
+            print("================= 디버깅 로그 시작 =================")
+            print(f"현재 URL: {page.url}")
+
+            # 스크린샷 저장
+            screenshot_path = f"debug_screenshot_{int(time.time())}.png"
+            await page.screenshot(path=screenshot_path)
+            print(f"스크린샷 저장됨: {screenshot_path}")
+
+            # HTML 콘텐츠 일부 출력
+            content_preview = await page.content()
+            print("페이지 HTML 미리보기 (앞부분 500자):")
+            print(content_preview[:500])
+
+            print("================= 디버깅 로그 종료 =================")
+
         except Exception as e:
-
-            # ✨ [핵심 수정] 오류 발생 시 상세한 Traceback을 콘솔에 출력합니다.
-
             print("=====================================")
 
             print(f"!!! CRITICAL ERROR IN CRAWLER: {e}")
