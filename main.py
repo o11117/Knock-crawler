@@ -78,30 +78,34 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             ignore_https_errors=True
         )
         page: Page = await context.new_page()
-        base_url = "https://www.bdsplanet.com"
+
+        # ✨ [핵심 수정 1] 요청하신 URL에서 크롤링을 시작합니다.
+        start_url = "https://www.bdsplanet.com/map/realprice_map.ytp?ubt_mode=tms"
 
         try:
-            await page.goto(f"{base_url}/main.ytp", wait_until="networkidle", timeout=90000)
+            await page.goto(start_url, wait_until="networkidle", timeout=90000)
 
-            search_input = page.locator("input[placeholder*='주소'], input[placeholder*='검색']").first
-            await search_input.wait_for(state="visible", timeout=10000)
+            # ✨ [핵심 수정 2] 지도 페이지의 검색창을 찾아 주소를 입력하고 'Enter'를 누릅니다.
+            search_input_selector = 'input[name="search_keyword"]'
+            await page.wait_for_selector(search_input_selector, timeout=10000)
+            search_input = page.locator(search_input_selector)
             await search_input.fill(address)
             await search_input.press("Enter")
 
-            # ✨ [핵심 수정] URL 변경을 기다리는 대신, 검색 결과 페이지의 특정 패턴을 기다립니다.
-            # 타임아웃도 30초로 넉넉하게 늘립니다.
+            # ✨ [핵심 수정 3] URL이 바뀌기를 30초 동안 안정적으로 기다립니다.
             expected_url_pattern = re.compile(r"/map/realprice_map/[^/]+/")
             await page.wait_for_url(expected_url_pattern, timeout=30000)
             final_url = page.url
 
-            # match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp.*)", final_url)
-            # ✨ [수정] URL 패턴을 더 유연하게 변경합니다.
             match = re.search(r"(/map/realprice_map/.*/)([12])(/.*)", final_url)
 
             if match:
                 base_pattern, _, suffix = match.groups()
-                sale_url = f"{base_url}{base_pattern}1{suffix}"
-                rent_url = f"{base_url}{base_pattern}2{suffix}"
+
+                # ✨ [핵심 수정 4] URL 조합 오류를 방지하기 위해 전체 도메인을 직접 사용합니다.
+                base_domain = "https://www.bdsplanet.com"
+                sale_url = f"{base_domain}{base_pattern}1{suffix}"
+                rent_url = f"{base_domain}{base_pattern}2{suffix}"
 
                 await page.goto(sale_url, wait_until="domcontentloaded")
                 sale_price = await extract_price(page)
