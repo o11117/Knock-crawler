@@ -100,7 +100,7 @@ async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
             if not final_url:
                 raise TimeoutError(f"15초 내에 검색 결과 페이지로 이동하지 못했습니다. 현재 URL: {page.url}")
 
-            match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp.*)", final_url)
+            match = re.search(r"(/map/realprice_map/.*/)([12])(/.*)", final_url)
             if match:
                 base_pattern, _, suffix = match.groups()
                 sale_url = f"{base_url}{base_pattern}1{suffix}"
