@@ -1,153 +1,122 @@
-# main.py
+# main.py (리소스 및 의존성 문제 대응 버전)
 import asyncio
 import re
+import time
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from playwright.async_api import async_playwright, Page, Browser, TimeoutError
-from typing import Union, Optional
-
-
-# R-TECH 사이트의 가격 포맷(예: '59,000')을 원 단위 정수로 변환하는 함수
-def parse_price_in_manwon(price_str: Optional[str]) -> Optional[int]:
-    """
-    '59,000'과 같이 만원 단위로 된 가격 문자열을 원 단위 정수로 변환합니다.
-    공백, 쉼표를 제거하고 10000을 곱합니다.
-    """
-    if not price_str or not price_str.strip():
-        return None
-    try:
-        # 공백 및 쉼표 제거 후 정수로 변환
-        cleaned_price = int(price_str.replace(',', '').strip())
-        # 만원 단위를 원 단위로 변환
-        return cleaned_price * 10000
-    except (ValueError, TypeError):
-        return None
-
+from typing import Union
+from money_parser import to_won
 
 app = FastAPI()
 
 
-# 반환될 데이터 구조(DTO) 정의
-class RtechPriceDto(BaseModel):
+class LowestPriceDto(BaseModel):
     address: str
-    saleLowerAvg: Union[int, None] = None
-    saleUpperAvg: Union[int, None] = None
-    rentLowerAvg: Union[int, None] = None
-    rentUpperAvg: Union[int, None] = None
+    salePrice: Union[int, None] = None
+    rentPrice: Union[int, None] = None
     sourceUrl: Union[str, None] = None
     error: Union[str, None] = None
 
 
-async def extract_prices_from_popup(page: Page) -> dict:
-    """새로운 팝업 창에서 매매가와 전세가의 상한/하한 평균가를 추출합니다."""
-
-    # ✨ [수정된 부분] 대기 조건을 더 강화합니다.
-    # 테이블의 행(tr)이 아니라, 가격 정보가 담기는 파란색 텍스트의 셀(td.table_txt_blue)이
-    # 실제로 렌더링될 때까지 최대 20초간 기다립니다.
+async def extract_price(page: Page) -> Union[int, None]:
     try:
-        await page.wait_for_selector("#areaList > tr > td.table_txt_blue", timeout=20000)
-    except TimeoutError:
-        print("가격 정보 테이블이 시간 내에 로드되지 않았습니다. 해당 주소의 시세 정보가 없을 수 있습니다.")
-        return {}  # 타임아웃 발생 시 빈 딕셔너리 반환
-
-    # 첫 번째 면적(row)을 기준으로 가격을 추출합니다.
-    base_row_selector = "#areaList > tr:first-child"
-    sale_lower_selector = f"{base_row_selector} > td:nth-child(3)"
-    sale_upper_selector = f"{base_row_selector} > td:nth-child(4)"
-    rent_lower_selector = f"{base_row_selector} > td:nth-child(5)"
-    rent_upper_selector = f"{base_row_selector} > td:nth-child(6)"
-
-    try:
-        # 각 선택자에 해당하는 요소의 텍스트를 가져옵니다.
-        sale_lower_text = await page.locator(sale_lower_selector).text_content()
-        sale_upper_text = await page.locator(sale_upper_selector).text_content()
-        rent_lower_text = await page.locator(rent_lower_selector).text_content()
-        rent_upper_text = await page.locator(rent_upper_selector).text_content()
-
-        # 가져온 텍스트를 원 단위 숫자로 변환합니다.
-        return {
-            "saleLowerAvg": parse_price_in_manwon(sale_lower_text),
-            "saleUpperAvg": parse_price_in_manwon(sale_upper_text),
-            "rentLowerAvg": parse_price_in_manwon(rent_lower_text),
-            "rentUpperAvg": parse_price_in_manwon(rent_upper_text),
-        }
+        await page.wait_for_selector(".price-info-area", timeout=7000)
+        label = page.locator("*:has-text('매물 최저가')").first
+        if await label.count() > 0:
+            price_area = label.locator("..").locator(".price-info-area .price-area .txt")
+            if await price_area.count() > 0:
+                price_text = await price_area.first.text_content()
+                if price_text and ('억' in price_text or '만' in price_text):
+                    return to_won(price_text.strip())
+        price_elements = await page.locator(".price-info-area .price-area .txt").all()
+        for el in price_elements:
+            price_text = await el.text_content()
+            if price_text and ('억' in price_text or '만' in price_text):
+                price = to_won(price_text.strip())
+                if price > 0:
+                    return price
     except Exception as e:
-        print(f"가격 추출 중 오류 발생: {e}")
-        return {}
+        print(f"가격 추출 중 오류: {e}")
+    return None
 
 
-# 크롤링 로직을 담당하는 메인 함수
-async def fetch_prices_from_rtech(address: str) -> RtechPriceDto:
+async def fetch_lowest_by_address(address: str) -> LowestPriceDto:
     async with async_playwright() as p:
         browser: Browser = await p.chromium.launch(
-            headless=True,  # 실제 운영 시에는 True로 변경하는 것이 좋습니다.
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled"
+            ]
         )
         context = await browser.new_context(
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            viewport={'width': 1920, 'height': 1080},
             locale='ko-KR'
         )
         page: Page = await context.new_page()
-        base_url = "https://rtech.or.kr/main/mapSearch.do"
+        base_url = "https://www.bdsplanet.com"
 
         try:
-            # 1. 사이트 접속
-            await page.goto(base_url, wait_until="networkidle", timeout=30000)
+            # 1. 사이트 접속 (긴 타임아웃 유지)
+            # 서버의 느린 브라우저 실행 속도를 감안하여 timeout은 넉넉하게 유지
+            await page.goto(f"{base_url}/main.ytp", wait_until="networkidle", timeout=30000)
 
-            # 2. '빠른검색' 창에 주소 입력 (ID: searchInput)
-            search_input_selector = "#searchInput"
-            await page.wait_for_selector(search_input_selector, timeout=10000)
-            await page.locator(search_input_selector).fill(address)
+            # 2. 검색 실행
+            search_input = page.locator("input[placeholder*='주소'], input[placeholder*='검색']").first
+            await search_input.wait_for(state="visible", timeout=10000)
+            await search_input.fill(address)
+            await search_input.press("Enter")
 
-            # 3. 3초 대기 후 드롭다운 첫번째 항목 클릭
-            await page.wait_for_timeout(3000)
-            first_item_selector = "#quickSearchResult > li:first-child > a"
-            await page.wait_for_selector(first_item_selector, timeout=10000)
+            # 3. URL 변경 폴링(Polling) 루프
+            expected_url_pattern = re.compile(r"/map/realprice_map/[^/]+/N/[ABC]/")
+            end_time = time.time() + 15
+            final_url = None
+            while time.time() < end_time:
+                current_url = page.url
+                if expected_url_pattern.search(current_url):
+                    final_url = current_url
+                    break
+                await asyncio.sleep(0.5)
 
-            # ✨ [수정된 부분] 여러 개의 요소를 찾더라도 첫 번째 요소를 클릭하도록 .first 추가
-            await page.locator(first_item_selector).first.click()
+            if not final_url:
+                raise TimeoutError(f"15초 내에 검색 결과 페이지로 이동하지 못했습니다. 현재 URL: {page.url}")
 
-            # 지도 위 정보창이 뜨는 것을 잠시 대기
-            await page.wait_for_timeout(1000)
+            # 4. URL 분석 및 가격 추출
+            match = re.search(r"(/map/realprice_map/[^/]+/N/[ABC]/)([12])(/[^/]+\.ytp.*)", final_url)
+            if match:
+                base_pattern, _, suffix = match.groups()
+                sale_url = f"{base_url}{base_pattern}1{suffix}"
+                rent_url = f"{base_url}{base_pattern}2{suffix}"
 
-            # 4. '더보기' 버튼 클릭 및 새 창(팝업) 처리
-            async with context.expect_page() as new_page_info:
-                more_button_selector = ".map_pop_info_bottom_btn:has-text('더보기')"
-                await page.wait_for_selector(more_button_selector, timeout=10000)
-                await page.locator(more_button_selector).click()
+                await page.goto(sale_url, wait_until="domcontentloaded")
+                sale_price = await extract_price(page)
 
-            popup_page = await new_page_info.value
-            await popup_page.wait_for_load_state("domcontentloaded")
+                await page.goto(rent_url, wait_until="domcontentloaded")
+                rent_price = await extract_price(page)
 
-            # 5. 새 창에서 가격 정보 추출
-            prices = await extract_prices_from_popup(popup_page)
-
-            return RtechPriceDto(
-                address=address,
-                saleLowerAvg=prices.get("saleLowerAvg"),
-                saleUpperAvg=prices.get("saleUpperAvg"),
-                rentLowerAvg=prices.get("rentLowerAvg"),
-                rentUpperAvg=prices.get("rentUpperAvg"),
-                sourceUrl=popup_page.url
-            )
+                return LowestPriceDto(address=address, salePrice=sale_price, rentPrice=rent_price, sourceUrl=sale_url)
+            else:
+                return LowestPriceDto(address=address, error=f"URL 패턴 분석 실패: {final_url}")
 
         except Exception as e:
-            return RtechPriceDto(address=address, error=f"크롤링 오류 발생: {e}")
+            # ✨ [수정] 스크린샷 기능 제거, 오류 메시지만 반환
+            return LowestPriceDto(address=address, error=f"크롤링 오류 발생: {e}")
         finally:
             await context.close()
             await browser.close()
 
 
-# API 엔드포인트
-@app.get("/crawl", response_model=RtechPriceDto)
-async def crawl_rtech_prices(address: str):
+@app.get("/crawl", response_model=LowestPriceDto)
+async def crawl_real_estate(address: str):
     if not address:
         raise HTTPException(status_code=400, detail="주소를 입력해주세요.")
-    return await fetch_prices_from_rtech(address)
+    return await fetch_lowest_by_address(address)
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    # 터미널에서 uvicorn main:app --reload --host 0.0.0.0 --port 8000 명령어로 실행
     uvicorn.run(app, host="0.0.0.0", port=8000)
