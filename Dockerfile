@@ -12,6 +12,9 @@ COPY requirements.txt .
 # 4. requirements.txt 로 Python 라이브러리 설치
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ✨ [수정] firefox를 설치 목록에 추가합니다.
+RUN playwright install firefox
+
 # 5. [핵심 수정 부분] Playwright 라이브러리와 이미지에 내장된 브라우저를 연결합니다.
 # --with-deps 옵션은 필요한 모든 시스템 의존성을 함께 설치해줍니다.
 RUN python -m playwright install --with-deps chromium
